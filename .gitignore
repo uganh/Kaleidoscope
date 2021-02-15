@@ -1,0 +1,7 @@
+# Auto generated
+KaleidoscopeParser.h
+KaleidoscopeParser.cc
+KaleidoscopeParser.output
+
+# Build out-of-source
+build/
