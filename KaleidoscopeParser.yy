@@ -15,6 +15,10 @@
 %token IF
 %token THEN
 %token ELSE
+%token FOR
+%token IN
+%token UNARY
+%token BINARY
 %token <std::string> IDENTIFIER
 %token <double> NUMBER
 
@@ -26,7 +30,7 @@
 %left '*'
 
 %nterm <std::unique_ptr<Expr>> Expr
-%nterm <std::vector<std::unique_ptr<Expr>>> ExprList
+%nterm <std::vector<std::unique_ptr<Expr>>> ExprList OptionalExprList
 %nterm <std::unique_ptr<Prototype>> Prototype
 %nterm <std::vector<std::string>> ParameterList OptionalParameterList
 
@@ -79,6 +83,22 @@ parser::symbol_type yylex(void) {
       return parser::make_ELSE();
     }
 
+    if (Text == "for") {
+      return parser::make_FOR();
+    }
+
+    if (Text == "in") {
+      return parser::make_IN();
+    }
+
+    if (Text == "unary") {
+      return parser::make_UNARY();
+    }
+
+    if (Text == "binary") {
+      return parser::make_BINARY();
+    }
+
     return parser::make_IDENTIFIER(Text);
   }
 
@@ -119,6 +139,7 @@ void parser::error(const std::string &msg) {
   while (LastChar != EOF && LastChar != '\n') {
     LastChar = std::cin.get();
   }
+  Restart = true;
 }
 } // namespace yy
 }
@@ -197,7 +218,7 @@ Expr:
   | IDENTIFIER {
       $$ = std::make_unique<Variable>($1);
     }
-  | IDENTIFIER '(' ExprList ')' {
+  | IDENTIFIER '(' OptionalExprList ')' {
       $$ = std::make_unique<CallExpr>($1, std::move($3));
     }
   | '(' Expr ')' {
@@ -217,6 +238,21 @@ Expr:
     }
   | IF Expr THEN Expr ELSE Expr %prec DEFAULT {
       $$ = std::make_unique<IfExpr>(std::move($2), std::move($4), std::move($6));
+    }
+  | FOR IDENTIFIER '=' Expr ',' Expr IN Expr %prec DEFAULT {
+      $$ = std::make_unique<ForExpr>($2, std::move($4), std::move($6), nullptr, std::move($8));
+    }
+  | FOR IDENTIFIER '=' Expr ',' Expr ',' Expr IN Expr %prec DEFAULT {
+      $$ = std::make_unique<ForExpr>($2, std::move($4), std::move($6), std::move($8), std::move($10));
+    }
+  ;
+
+OptionalExprList:
+    %empty {
+      $$ = std::vector<std::unique_ptr<Expr>>();
+    }
+  | ExprList {
+      $$ = std::move($1);
     }
   ;
 

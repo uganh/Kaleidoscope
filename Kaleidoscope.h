@@ -11,10 +11,10 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/IR/LegacyPassManager.h>
 
 #include "SymbolTable.h"
 
@@ -56,12 +56,12 @@ public:
 
 class UnaryExpr : public Expr {
 private:
-  char Opcode;
+  char Op;
   std::unique_ptr<Expr> Operand;
 
 public:
-  UnaryExpr(char Opcode, std::unique_ptr<Expr> &&Operand) :
-    Opcode(Opcode), Operand(std::move(Operand)) {}
+  UnaryExpr(char Op, std::unique_ptr<Expr> &&Operand) :
+    Op(Op), Operand(std::move(Operand)) {}
 
   llvm::Value *codegen(
     llvm::Module &Module,
@@ -71,13 +71,13 @@ public:
 
 class BinaryExpr : public Expr {
 private:
-  char Opcode;
+  char Op;
   std::unique_ptr<Expr> LHS, RHS;
 
 public:
   BinaryExpr(
-    char Opcode, std::unique_ptr<Expr> &&LHS, std::unique_ptr<Expr> &&RHS) :
-    Opcode(Opcode), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+    char Op, std::unique_ptr<Expr> &&LHS, std::unique_ptr<Expr> &&RHS) :
+    Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
 
   llvm::Value *codegen(
     llvm::Module &Module,
@@ -125,13 +125,20 @@ private:
 public:
   ForExpr(
     const std::string &VarName,
+    std::unique_ptr<Expr> &&Init,
     std::unique_ptr<Expr> &&Cond,
     std::unique_ptr<Expr> &&Step,
     std::unique_ptr<Expr> &&Body) :
     VarName(VarName),
+    Init(std::move(Init)),
     Cond(std::move(Cond)),
     Step(std::move(Step)),
     Body(std::move(Body)) {}
+
+  llvm::Value *codegen(
+    llvm::Module &Module,
+    llvm::IRBuilder<> &Builder,
+    SymbolTable &Symtab) const override;
 };
 
 class Prototype final {
