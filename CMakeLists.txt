@@ -17,9 +17,10 @@ BISON_TARGET(
   VERBOSE ${CMAKE_CURRENT_SOURCE_DIR}/KaleidoscopeParser.output
   )
 
-# LLVM library
+# Find LLVM libraries
 find_package(LLVM REQUIRED CONFIG)
-llvm_map_components_to_libnames(LLVM_LIBRARIES core support scalaropts instcombine transformutils)
+llvm_map_components_to_libnames(
+  LLVM_LIBRARIES core support scalaropts instcombine transformutils native mc)
 
 # Executable
 add_executable(

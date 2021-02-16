@@ -2,6 +2,20 @@
 #include <exception>
 #include <iostream>
 
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/Optional.h>
+#include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Constant.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Host.h>
+#include <llvm/Support/TargetRegistry.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/GVN.h>
@@ -52,7 +66,7 @@ llvm::Value *BinaryExpr::codegen(
     // Assignment requires the LHS to be an identifier
     Variable *LHS = static_cast<Variable *>(this->LHS.get());
     assert(LHS && "Destination of '=' must be a variable");
-    
+
     llvm::Value *Alloca = Symtab.lookup(LHS->getName());
     if (!Alloca) {
       throw std::runtime_error("Unknown variable: " + LHS->getName());
@@ -303,7 +317,6 @@ int main(int argc, char *argv[]) {
   llvm::IRBuilder<> Builder(Context);
 
   llvm::legacy::FunctionPassManager PassManager(&Module);
-
   // Promote allocas to registers
   PassManager.add(llvm::createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optzns
@@ -314,18 +327,59 @@ int main(int argc, char *argv[]) {
   PassManager.add(llvm::createGVNPass());
   // Simplify the control flow graph (deleting unreachable blocks, etc)
   PassManager.add(llvm::createCFGSimplificationPass());
-
   PassManager.doInitialization();
 
   SymbolTable Symtab;
 
-  yy::parser parse(Module, Builder, PassManager, Symtab);
-
+  // Interactive parsing and compiling
   std::cout << ">>> " << std::flush;
+  yy::parser parser(Module, Builder, PassManager, Symtab);
   do {
-    parse();
+    parser.parse();
   } while (std::cin);
   std::cout << std::endl;
+
+  // Initialize the target registry, etc.
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmParser();
+  llvm::InitializeNativeTargetAsmPrinter();
+
+  std::string Error;
+  auto TargetTriple = llvm::sys::getDefaultTargetTriple();
+
+  auto Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
+  // Print an error and exit if we couldn't find the requested target
+  if (!Target) {
+    llvm::errs() << Error;
+    exit(EXIT_FAILURE);
+  }
+
+  llvm::TargetOptions Opt;
+  auto RelocModel = llvm::Optional<llvm::Reloc::Model>();
+  auto TargetMachine =
+    Target->createTargetMachine(TargetTriple, "generic", "", Opt, RelocModel);
+
+  // Optimizations benefit from knowing about the target and data layout
+  Module.setTargetTriple(TargetTriple);
+  Module.setDataLayout(TargetMachine->createDataLayout());
+
+  // Open the output file
+  std::error_code Status;
+  llvm::raw_fd_ostream Output("output.o", Status, llvm::sys::fs::OF_None);
+  if (Status) {
+    llvm::errs() << "Could not open file: " << Status.message();
+    exit(EXIT_FAILURE);
+  }
+
+  // Define a pass that emits object code and run it
+  llvm::legacy::PassManager Manager;
+  if (TargetMachine->addPassesToEmitFile(
+        Manager, Output, nullptr, llvm::CGFT_ObjectFile)) {
+    llvm::errs() << "Target machine can't emit a file of this type";
+    exit(EXIT_FAILURE);
+  }
+  Manager.run(Module);
+  Output.flush();
 
   return 0;
 }
