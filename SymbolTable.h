@@ -20,6 +20,7 @@ private:
   size_t Depth;
   std::vector<SymbolInfo> Values;
   std::unordered_map<std::string, size_t> NamedValues;
+  std::unordered_map<char, int> BinopPrecedence;
 
 public:
   SymbolTable(void) : Depth(0) {}
@@ -61,12 +62,24 @@ public:
     Values.push_back({Name, Value, Depth, Outer});
   }
 
+  void define(char Operator, unsigned Precedence) {
+    BinopPrecedence[Operator] = Precedence;
+  }
+
   llvm::Value *lookup(const std::string &Name) const {
     auto Iter = NamedValues.find(Name);
     if (Iter != NamedValues.cend()) {
       return Values[Iter->second].Value;
     }
     return nullptr;
+  }
+
+  int getTokPrecedence(char Operator) const {
+    if (!isascii(Operator) ||
+        BinopPrecedence.find(Operator) == BinopPrecedence.cend()) {
+      return -1;
+    }
+    return BinopPrecedence.find(Operator)->second;
   }
 };
 

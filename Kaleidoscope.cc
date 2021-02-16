@@ -22,9 +22,9 @@ llvm::Value *Variable::codegen(
 llvm::Value *UnaryExpr::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
   llvm::Value *OperandValue = Operand->codegen(Module, Builder, Symtab);
-  llvm::Function *Func = Module.getFunction(std::string("unary") + Op);
+  llvm::Function *Func      = Module.getFunction(std::string("unary") + Operator);
   if (!Func) {
-    throw std::runtime_error(std::string("Unknown unary operator: ") + Op);
+    throw std::runtime_error(std::string("Unknown unary operator: ") + Operator);
   }
   return Builder.CreateCall(Func, OperandValue, "unop");
 }
@@ -33,7 +33,7 @@ llvm::Value *BinaryExpr::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
   llvm::Value *LHSValue = LHS->codegen(Module, Builder, Symtab);
   llvm::Value *RHSValue = RHS->codegen(Module, Builder, Symtab);
-  switch (Op) {
+  switch (Operator) {
     case '+':
       return Builder.CreateFAdd(LHSValue, RHSValue, "addtmp");
     case '-':
@@ -47,8 +47,10 @@ llvm::Value *BinaryExpr::codegen(
     }
     default: {
       // If it wasn't a buildin binary operator, it must be a user defined one
-      llvm::Function *Func = Module.getFunction(std::string("binary") + Op);
-      assert(Func && "Invalid binary operator");
+      llvm::Function *Func = Module.getFunction(std::string("binary") + Operator);
+      if (!Func) {
+        throw std::runtime_error(std::string("Unknown binary operator: ") + Operator);
+      }
       llvm::Value *Operands[2] = {LHSValue, RHSValue};
       return Builder.CreateCall(Func, Operands, "binop");
     }
@@ -243,6 +245,10 @@ int main(int argc, char *argv[]) {
   PassManager.doInitialization();
 
   SymbolTable Symtab;
+  Symtab.define('<', 1);
+  Symtab.define('+', 2);
+  Symtab.define('-', 2);
+  Symtab.define('*', 4);
 
   yy::parser parse(Module, Builder, PassManager, Symtab);
 

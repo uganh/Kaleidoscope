@@ -56,12 +56,12 @@ public:
 
 class UnaryExpr : public Expr {
 private:
-  char Op;
+  char Operator;
   std::unique_ptr<Expr> Operand;
 
 public:
-  UnaryExpr(char Op, std::unique_ptr<Expr> &&Operand) :
-    Op(Op), Operand(std::move(Operand)) {}
+  UnaryExpr(char Operator, std::unique_ptr<Expr> &&Operand) :
+    Operator(Operator), Operand(std::move(Operand)) {}
 
   llvm::Value *codegen(
     llvm::Module &Module,
@@ -71,13 +71,13 @@ public:
 
 class BinaryExpr : public Expr {
 private:
-  char Op;
+  char Operator;
   std::unique_ptr<Expr> LHS, RHS;
 
 public:
   BinaryExpr(
-    char Op, std::unique_ptr<Expr> &&LHS, std::unique_ptr<Expr> &&RHS) :
-    Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+    char Operator, std::unique_ptr<Expr> &&LHS, std::unique_ptr<Expr> &&RHS) :
+    Operator(Operator), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
 
   llvm::Value *codegen(
     llvm::Module &Module,
@@ -149,6 +149,12 @@ private:
 public:
   Prototype(const std::string &Name, std::vector<std::string> &&Params) :
     Name(Name), Params(std::move(Params)) {}
+
+  Prototype(char Operator, const std::string &Operand) :
+    Name(std::string("unary") + Operator), Params{Operand} {}
+
+  Prototype(char Operator, const std::string &LHS, const std::string &RHS) :
+    Name(std::string("binary") + Operator), Params{LHS, RHS} {}
 
   llvm::Function *codegen(
     llvm::Module &Module,

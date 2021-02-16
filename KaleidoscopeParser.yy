@@ -10,6 +10,8 @@
 %parse-param {llvm::legacy::FunctionPassManager &PassManager}
 %parse-param {SymbolTable &Symtab}
 
+%lex-param {const SymbolTable &Symtab}
+
 %token DEF
 %token EXTERN
 %token IF
@@ -21,18 +23,30 @@
 %token BINARY
 %token <std::string> IDENTIFIER
 %token <double> NUMBER
+%token <char> OPERATOR
 
 /* The lowest priority used to solve trivial shift-reduce conflicts */
 %precedence DEFAULT
 
-%nonassoc '<'
-%left '+' '-'
-%left '*'
+%left <char> OPERATOR1
+%left <char> OPERATOR2
+%left <char> OPERATOR3
+%left <char> OPERATOR4
+%left <char> OPERATOR5
+%left <char> OPERATOR6
+%left <char> OPERATOR7
+%left <char> OPERATOR8
+%left <char> OPERATOR9
+%left <char> OPERATOR10
+
+/* Define the precedence of the unary operator */
+%precedence UNARY
 
 %nterm <std::unique_ptr<Expr>> Expr
 %nterm <std::vector<std::unique_ptr<Expr>>> ExprList OptionalExprList
 %nterm <std::unique_ptr<Prototype>> Prototype
 %nterm <std::vector<std::string>> ParameterList OptionalParameterList
+%nterm <char> Operator
 
 %code requires {
 #include "Kaleidoscope.h"
@@ -43,7 +57,9 @@ namespace yy {
 static bool Restart = true;
 static int LastChar = ' ';
 
-parser::symbol_type yylex(void) {
+parser::symbol_type yylex(const SymbolTable &Symtab) {
+  const static std::string Operators = "!&*+-./:<=>|";
+
   while (isspace(LastChar)) {
     if (LastChar == '\n') {
       if (Restart) {
@@ -128,8 +144,25 @@ parser::symbol_type yylex(void) {
     return parser::make_YYEOF();
   }
 
-  int ThisChar = LastChar;
+  char ThisChar = static_cast<char>(LastChar);
   LastChar = std::cin.get();
+
+  if (Operators.find(ThisChar) != std::string::npos) {
+    switch (Symtab.getTokPrecedence(ThisChar)) {
+      case 1: return parser::make_OPERATOR1(ThisChar);
+      case 2: return parser::make_OPERATOR2(ThisChar);
+      case 3: return parser::make_OPERATOR3(ThisChar);
+      case 4: return parser::make_OPERATOR4(ThisChar);
+      case 5: return parser::make_OPERATOR5(ThisChar);
+      case 6: return parser::make_OPERATOR6(ThisChar);
+      case 7: return parser::make_OPERATOR7(ThisChar);
+      case 8: return parser::make_OPERATOR8(ThisChar);
+      case 9: return parser::make_OPERATOR9(ThisChar);
+      case 10: return parser::make_OPERATOR10(ThisChar);
+      default: return parser::make_OPERATOR(ThisChar);
+    }
+  }
+
   return parser::symbol_type(ThisChar);
 }
 
@@ -190,6 +223,22 @@ Prototype:
     IDENTIFIER '(' OptionalParameterList ')' {
       $$ = std::make_unique<Prototype>($1, std::move($3));
     }
+  | UNARY Operator '(' IDENTIFIER ')' {
+      $$ = std::make_unique<Prototype>($2, $4);
+    }
+  | BINARY Operator '(' IDENTIFIER IDENTIFIER ')' {
+      Symtab.define($2, 3);
+      $$ = std::make_unique<Prototype>($2, $4, $5);
+    }
+  | BINARY Operator NUMBER '(' IDENTIFIER IDENTIFIER ')' {
+      unsigned Precedence = static_cast<unsigned>($3);
+      if (Precedence < 1 || Precedence > 10) {
+        parser::error("Invalid precedence: must be 1..10");
+        YYERROR;
+      }
+      Symtab.define($2, Precedence);
+      $$ = std::make_unique<Prototype>($2, $5, $6);
+    }
   ;
 
 OptionalParameterList:
@@ -224,17 +273,38 @@ Expr:
   | '(' Expr ')' {
       $$ = std::move($2);
     }
-  | Expr '<' Expr {
-      $$ = std::make_unique<BinaryExpr>('<', std::move($1), std::move($3));
+  | Operator Expr %prec UNARY {
+      $$ = std::make_unique<UnaryExpr>($1, std::move($2));
     }
-  | Expr '+' Expr {
-      $$ = std::make_unique<BinaryExpr>('+', std::move($1), std::move($3));
+  | Expr OPERATOR1 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
     }
-  | Expr '-' Expr {
-      $$ = std::make_unique<BinaryExpr>('-', std::move($1), std::move($3));
+  | Expr OPERATOR2 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
     }
-  | Expr '*' Expr {
-      $$ = std::make_unique<BinaryExpr>('*', std::move($1), std::move($3));
+  | Expr OPERATOR3 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR4 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR5 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR6 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR7 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR8 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR9 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
+    }
+  | Expr OPERATOR10 Expr {
+      $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
     }
   | IF Expr THEN Expr ELSE Expr %prec DEFAULT {
       $$ = std::make_unique<IfExpr>(std::move($2), std::move($4), std::move($6));
@@ -265,6 +335,20 @@ ExprList:
       $$ = std::move($1);
       $$.emplace_back(std::move($3));
     }
+  ;
+
+Operator:
+    OPERATOR
+  | OPERATOR1
+  | OPERATOR2
+  | OPERATOR3
+  | OPERATOR4
+  | OPERATOR5
+  | OPERATOR6
+  | OPERATOR7
+  | OPERATOR8
+  | OPERATOR9
+  | OPERATOR10
   ;
 
 %%
