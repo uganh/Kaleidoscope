@@ -5,3 +5,6 @@ KaleidoscopeParser.output
 
 # Build out-of-source
 build/
+
+# IDE
+.vscode/

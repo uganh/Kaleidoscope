@@ -48,6 +48,10 @@ private:
 public:
   Variable(const std::string &Name) : Name(Name) {}
 
+  const std::string &getName(void) const {
+    return Name;
+  }
+
   llvm::Value *codegen(
     llvm::Module &Module,
     llvm::IRBuilder<> &Builder,
@@ -134,6 +138,23 @@ public:
     Cond(std::move(Cond)),
     Step(std::move(Step)),
     Body(std::move(Body)) {}
+
+  llvm::Value *codegen(
+    llvm::Module &Module,
+    llvm::IRBuilder<> &Builder,
+    SymbolTable &Symtab) const override;
+};
+
+class VarExpr : public Expr {
+private:
+  std::vector<std::pair<std::string, std::unique_ptr<Expr>>> Defs;
+  std::unique_ptr<Expr> Body;
+
+public:
+  VarExpr(
+    std::vector<std::pair<std::string, std::unique_ptr<Expr>>> &&Defs,
+    std::unique_ptr<Expr> &&Body) :
+    Defs(std::move(Defs)), Body(std::move(Body)) {}
 
   llvm::Value *codegen(
     llvm::Module &Module,

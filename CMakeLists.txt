@@ -19,7 +19,7 @@ BISON_TARGET(
 
 # LLVM library
 find_package(LLVM REQUIRED CONFIG)
-llvm_map_components_to_libnames(LLVM_LIBRARIES core support scalaropts instcombine)
+llvm_map_components_to_libnames(LLVM_LIBRARIES core support scalaropts instcombine transformutils)
 
 # Executable
 add_executable(

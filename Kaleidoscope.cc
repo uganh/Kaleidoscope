@@ -5,9 +5,18 @@
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Utils.h>
 
 #include "Kaleidoscope.h"
 #include "KaleidoscopeParser.h"
+
+static llvm::AllocaInst *
+CreateEntryAlloca(llvm::Function *Func, const std::string &Name) {
+  llvm::BasicBlock &EntryBB = Func->getEntryBlock();
+  llvm::IRBuilder<> Builder(&EntryBB, EntryBB.begin());
+  return Builder.CreateAlloca(
+    llvm::Type::getDoubleTy(Func->getContext()), nullptr, Name);
+}
 
 llvm::Value *Constant::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
@@ -16,23 +25,43 @@ llvm::Value *Constant::codegen(
 
 llvm::Value *Variable::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
-  return Symtab.lookup(Name);
+  llvm::Value *Alloca = Symtab.lookup(Name);
+  if (!Alloca) {
+    throw std::runtime_error("Unknown variable: " + Name);
+  }
+  return Builder.CreateLoad(Alloca, Name);
 }
 
 llvm::Value *UnaryExpr::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
   llvm::Value *OperandValue = Operand->codegen(Module, Builder, Symtab);
-  llvm::Function *Func      = Module.getFunction(std::string("unary") + Operator);
+  llvm::Function *Func = Module.getFunction(std::string("unary") + Operator);
   if (!Func) {
-    throw std::runtime_error(std::string("Unknown unary operator: ") + Operator);
+    throw std::runtime_error(
+      std::string("Unknown unary operator: ") + Operator);
   }
   return Builder.CreateCall(Func, OperandValue, "unop");
 }
 
 llvm::Value *BinaryExpr::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
-  llvm::Value *LHSValue = LHS->codegen(Module, Builder, Symtab);
   llvm::Value *RHSValue = RHS->codegen(Module, Builder, Symtab);
+
+  // Special case '=' because we don't want to emit the LHS as an expression
+  if (Operator == '=') {
+    // Assignment requires the LHS to be an identifier
+    Variable *LHS = static_cast<Variable *>(this->LHS.get());
+    assert(LHS && "Destination of '=' must be a variable");
+    
+    llvm::Value *Alloca = Symtab.lookup(LHS->getName());
+    if (!Alloca) {
+      throw std::runtime_error("Unknown variable: " + LHS->getName());
+    }
+    Builder.CreateStore(RHSValue, Alloca);
+    return RHSValue;
+  }
+
+  llvm::Value *LHSValue = LHS->codegen(Module, Builder, Symtab);
   switch (Operator) {
     case '+':
       return Builder.CreateFAdd(LHSValue, RHSValue, "addtmp");
@@ -47,9 +76,11 @@ llvm::Value *BinaryExpr::codegen(
     }
     default: {
       // If it wasn't a buildin binary operator, it must be a user defined one
-      llvm::Function *Func = Module.getFunction(std::string("binary") + Operator);
+      llvm::Function *Func =
+        Module.getFunction(std::string("binary") + Operator);
       if (!Func) {
-        throw std::runtime_error(std::string("Unknown binary operator: ") + Operator);
+        throw std::runtime_error(
+          std::string("Unknown binary operator: ") + Operator);
       }
       llvm::Value *Operands[2] = {LHSValue, RHSValue};
       return Builder.CreateCall(Func, Operands, "binop");
@@ -121,24 +152,29 @@ llvm::Value *IfExpr::codegen(
 
 llvm::Value *ForExpr::codegen(
   llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
+  llvm::Function *Func = Builder.GetInsertBlock()->getParent();
+
+  Symtab.enterScope();
+
+  // Create an alloca for the variable in the entry block
+  llvm::AllocaInst *Alloca = CreateEntryAlloca(Func, VarName);
+  Symtab.define(VarName, Alloca);
+
   // Emit 'init' code first, without 'variable' in scope
   llvm::Value *InitValue = Init->codegen(Module, Builder, Symtab);
 
+  // Store the value
+  Builder.CreateStore(InitValue, Alloca);
+
   llvm::BasicBlock *HeadBB = Builder.GetInsertBlock();
-  llvm::BasicBlock *LoopBB = llvm::BasicBlock::Create(
-    Builder.getContext(), "Loop", Builder.GetInsertBlock()->getParent());
+  llvm::BasicBlock *LoopBB =
+    llvm::BasicBlock::Create(Builder.getContext(), "Loop", Func);
 
   // Insert an explicit fall through from the current block to the LoopBB
   Builder.CreateBr(LoopBB);
 
-  Symtab.enterScope();
-
   // Emit `loop` block
   Builder.SetInsertPoint(LoopBB);
-  llvm::PHINode *Phi =
-    Builder.CreatePHI(Builder.getDoubleTy(), 2, VarName.c_str());
-  Phi->addIncoming(InitValue, HeadBB);
-  Symtab.define(VarName, Phi);
   Body->codegen(Module, Builder, Symtab);
   llvm::Value *StepValue = nullptr;
   if (Step) {
@@ -146,22 +182,21 @@ llvm::Value *ForExpr::codegen(
   } else {
     StepValue = llvm::ConstantFP::get(Builder.getContext(), llvm::APFloat(1.0));
   }
-  llvm::Value *NextValue = Builder.CreateFAdd(Phi, StepValue, "nextvar");
+  llvm::Value *CurrValue = Builder.CreateLoad(Alloca, VarName);
+  llvm::Value *NextValue = Builder.CreateFAdd(CurrValue, StepValue, "nextvar");
+  Builder.CreateStore(NextValue, Alloca);
   // Compute the loop condition
   llvm::Value *CondValue = Builder.CreateFCmpONE(
     Cond->codegen(Module, Builder, Symtab),
     llvm::ConstantFP::get(Builder.getContext(), llvm::APFloat(0.0)), "cond");
 
   // Note: current block can be changed
-  LoopBB                   = Builder.GetInsertBlock();
-  llvm::BasicBlock *ExitBB = llvm::BasicBlock::Create(
-    Builder.getContext(), "Exit", Builder.GetInsertBlock()->getParent());
+  LoopBB = Builder.GetInsertBlock();
+  llvm::BasicBlock *ExitBB =
+    llvm::BasicBlock::Create(Builder.getContext(), "Exit", Func);
 
   // Insert the conditional branch into the end of LoopBB
   Builder.CreateCondBr(CondValue, LoopBB, ExitBB);
-
-  // Add a new entry to the Phi node for the backedge
-  Phi->addIncoming(NextValue, LoopBB);
 
   Symtab.leaveScope();
 
@@ -170,6 +205,39 @@ llvm::Value *ForExpr::codegen(
 
   // For expr always returns 0.0
   return llvm::Constant::getNullValue(Builder.getDoubleTy());
+}
+
+llvm::Value *VarExpr::codegen(
+  llvm::Module &Module, llvm::IRBuilder<> &Builder, SymbolTable &Symtab) const {
+  llvm::Function *Func = Builder.GetInsertBlock()->getParent();
+
+  Symtab.enterScope();
+
+  // Register all variables and emit the initializer
+  for (auto &Def : Defs) {
+    const std::string &VarName        = Def.first;
+    const std::unique_ptr<Expr> &Init = Def.second;
+
+    // Emit the initializer before adding the variable to scope
+    llvm::Value *InitValue = nullptr;
+    if (Init) {
+      InitValue = Init->codegen(Module, Builder, Symtab);
+    } else {
+      InitValue =
+        llvm::ConstantFP::get(Builder.getContext(), llvm::APFloat(0.0));
+    }
+
+    llvm::AllocaInst *Alloca = CreateEntryAlloca(Func, VarName);
+    Builder.CreateStore(InitValue, Alloca);
+    Symtab.define(VarName, Alloca);
+  }
+
+  // Codegen the body, now that all variables are in scope
+  llvm::Value *BodyValue = Body->codegen(Module, Builder, Symtab);
+
+  Symtab.leaveScope();
+
+  return BodyValue;
 }
 
 llvm::Function *Prototype::codegen(
@@ -184,9 +252,7 @@ llvm::Function *Prototype::codegen(
 
   size_t Idx = 0;
   for (auto &Param : Func->args()) {
-    Param.setName(Params[Idx]);
-    Symtab.define(Params[Idx], &Param);
-    Idx++;
+    Param.setName(Params[Idx++]);
   }
 
   return Func;
@@ -197,9 +263,6 @@ llvm::Function *Function::codegen(
   llvm::IRBuilder<> &Builder,
   llvm::legacy::FunctionPassManager &PassManager,
   SymbolTable &Symtab) const {
-
-  Symtab.enterScope();
-
   llvm::Function *Func = Proto->codegen(Module, Builder, Symtab);
 
   /* TODO: Remove function if error occurs */
@@ -210,9 +273,17 @@ llvm::Function *Function::codegen(
       "Function cannot be redefined: " + Proto->getName());
   }
 
-  llvm::BasicBlock *BB =
+  llvm::BasicBlock *EntryBB =
     llvm::BasicBlock::Create(Builder.getContext(), "Entry", Func);
-  Builder.SetInsertPoint(BB);
+  Builder.SetInsertPoint(EntryBB);
+
+  Symtab.enterScope();
+
+  for (auto &Param : Func->args()) {
+    llvm::AllocaInst *Alloca = CreateEntryAlloca(Func, Param.getName());
+    Builder.CreateStore(&Param, Alloca);
+    Symtab.define(Param.getName(), Alloca);
+  }
 
   llvm::Value *RetValue = Body->codegen(Module, Builder, Symtab);
   Builder.CreateRet(RetValue);
@@ -233,6 +304,8 @@ int main(int argc, char *argv[]) {
 
   llvm::legacy::FunctionPassManager PassManager(&Module);
 
+  // Promote allocas to registers
+  PassManager.add(llvm::createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optzns
   PassManager.add(llvm::createInstructionCombiningPass());
   // Reassociate expressions
@@ -245,10 +318,6 @@ int main(int argc, char *argv[]) {
   PassManager.doInitialization();
 
   SymbolTable Symtab;
-  Symtab.define('<', 1);
-  Symtab.define('+', 2);
-  Symtab.define('-', 2);
-  Symtab.define('*', 4);
 
   yy::parser parse(Module, Builder, PassManager, Symtab);
 

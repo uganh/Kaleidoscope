@@ -21,23 +21,36 @@
 %token IN
 %token UNARY
 %token BINARY
+%token VAR
 %token <std::string> IDENTIFIER
 %token <double> NUMBER
 %token <char> OPERATOR
 
+/* User-defined operators */
+%token <char> OPERATOR1
+%token <char> OPERATOR2
+%token <char> OPERATOR3
+%token <char> OPERATOR4
+%token <char> OPERATOR5
+%token <char> OPERATOR6
+%token <char> OPERATOR7
+%token <char> OPERATOR8
+%token <char> OPERATOR9
+%token <char> OPERATOR10
+
 /* The lowest priority used to solve trivial shift-reduce conflicts */
 %precedence DEFAULT
 
-%left <char> OPERATOR1
-%left <char> OPERATOR2
-%left <char> OPERATOR3
-%left <char> OPERATOR4
-%left <char> OPERATOR5
-%left <char> OPERATOR6
-%left <char> OPERATOR7
-%left <char> OPERATOR8
-%left <char> OPERATOR9
-%left <char> OPERATOR10
+%left OPERATOR1 
+%left OPERATOR2 '='
+%left OPERATOR3 '<'
+%left OPERATOR4
+%left OPERATOR5
+%left OPERATOR6 '+' '-'
+%left OPERATOR7
+%left OPERATOR8 '*'
+%left OPERATOR9
+%left OPERATOR10
 
 /* Define the precedence of the unary operator */
 %precedence UNARY
@@ -47,6 +60,8 @@
 %nterm <std::unique_ptr<Prototype>> Prototype
 %nterm <std::vector<std::string>> ParameterList OptionalParameterList
 %nterm <char> Operator
+%nterm <std::vector<std::pair<std::string, std::unique_ptr<Expr>>>> VarDefs
+%nterm <std::pair<std::string, std::unique_ptr<Expr>>> VarDef
 
 %code requires {
 #include "Kaleidoscope.h"
@@ -58,7 +73,8 @@ static bool Restart = true;
 static int LastChar = ' ';
 
 parser::symbol_type yylex(const SymbolTable &Symtab) {
-  const static std::string Operators = "!&*+-./:<=>|";
+  // Available user-defined operators
+  const static std::string Operators = "!&./:>|";
 
   while (isspace(LastChar)) {
     if (LastChar == '\n') {
@@ -113,6 +129,10 @@ parser::symbol_type yylex(const SymbolTable &Symtab) {
 
     if (Text == "binary") {
       return parser::make_BINARY();
+    }
+
+    if (Text == "var") {
+      return parser::make_VAR();
     }
 
     return parser::make_IDENTIFIER(Text);
@@ -227,7 +247,8 @@ Prototype:
       $$ = std::make_unique<Prototype>($2, $4);
     }
   | BINARY Operator '(' IDENTIFIER IDENTIFIER ')' {
-      Symtab.define($2, 3);
+      /* TODO: Undo operator define if error occurs */
+      Symtab.define($2, 4);
       $$ = std::make_unique<Prototype>($2, $4, $5);
     }
   | BINARY Operator NUMBER '(' IDENTIFIER IDENTIFIER ')' {
@@ -236,6 +257,7 @@ Prototype:
         parser::error("Invalid precedence: must be 1..10");
         YYERROR;
       }
+      /* TODO: Undo operator define if error occurs */
       Symtab.define($2, Precedence);
       $$ = std::make_unique<Prototype>($2, $5, $6);
     }
@@ -276,6 +298,22 @@ Expr:
   | Operator Expr %prec UNARY {
       $$ = std::make_unique<UnaryExpr>($1, std::move($2));
     }
+  | IDENTIFIER '=' Expr {
+      $$ = std::make_unique<BinaryExpr>(
+        '=', std::make_unique<Variable>($1), std::move($3));
+    }
+  | Expr '<' Expr {
+      $$ = std::make_unique<BinaryExpr>('<', std::move($1), std::move($3));
+    }
+  | Expr '+' Expr {
+      $$ = std::make_unique<BinaryExpr>('+', std::move($1), std::move($3));
+    }
+  | Expr '-' Expr {
+      $$ = std::make_unique<BinaryExpr>('-', std::move($1), std::move($3));
+    }
+  | Expr '*' Expr {
+      $$ = std::make_unique<BinaryExpr>('*', std::move($1), std::move($3));
+    }
   | Expr OPERATOR1 Expr {
       $$ = std::make_unique<BinaryExpr>($2, std::move($1), std::move($3));
     }
@@ -315,6 +353,9 @@ Expr:
   | FOR IDENTIFIER '=' Expr ',' Expr ',' Expr IN Expr %prec DEFAULT {
       $$ = std::make_unique<ForExpr>($2, std::move($4), std::move($6), std::move($8), std::move($10));
     }
+  | VAR VarDefs IN Expr %prec DEFAULT {
+      $$ = std::make_unique<VarExpr>(std::move($2), std::move($4));
+    }
   ;
 
 OptionalExprList:
@@ -334,6 +375,26 @@ ExprList:
   | ExprList ',' Expr {
       $$ = std::move($1);
       $$.emplace_back(std::move($3));
+    }
+  ;
+
+VarDefs:
+    VarDef {
+      $$ = std::vector<std::pair<std::string, std::unique_ptr<Expr>>>();
+      $$.emplace_back(std::move($1));
+    }
+  | VarDefs ',' VarDef {
+      $$ = std::move($1);
+      $$.emplace_back(std::move($3));
+    }
+  ;
+
+VarDef:
+    IDENTIFIER {
+      $$ = std::make_pair($1, nullptr);
+    }
+  | IDENTIFIER '=' Expr {
+      $$ = std::make_pair($1, std::move($3));
     }
   ;
 
